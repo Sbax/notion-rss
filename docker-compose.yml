@@ -1,0 +1,19 @@
+services:
+  rss:
+    build:
+      context: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      LINKS_STORE: "/app/links_cache.json"
+      RSS_OUTPUT: "/app/public/rss.xml"
+      RSS_LINK: "http://localhost:8080/rss.xml"
+      RSS_TITLE: "Notion Feed"
+      RSS_DESCRIPTION: "Links collected from Notion/cache"
+      RSS_MAX_ITEMS: "100"
+      SYNC_INTERVAL_SECONDS: "86400"
+    volumes:
+      - ./links_cache.json:/app/links_cache.json
+      - ./public:/app/public
