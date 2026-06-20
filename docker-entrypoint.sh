@@ -51,4 +51,4 @@ fi
   done
 ) &
 
-exec python -m http.server "$PORT" --directory /app/public
+exec python -m http.server "$PORT" --bind 0.0.0.0 --directory /app/public
