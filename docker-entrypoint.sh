@@ -31,18 +31,23 @@ sync_and_generate() {
     --max-items "$MAX_ITEMS"
 }
 
-# Ensure RSS exists from cache even before the first sync attempt.
-generate_rss_only || true
+# Run an initial sync before serving; fall back to cache-based RSS on failure.
+if sync_and_generate; then
+  echo "[startup] initial sync completed"
+else
+  echo "[startup] initial sync failed; generating RSS from cache"
+  generate_rss_only || true
+fi
 
 (
   while true; do
+    sleep "$SYNC_INTERVAL_SECONDS"
+
     if sync_and_generate; then
       echo "[scheduler] sync completed"
     else
       echo "[scheduler] sync failed; will retry after interval"
     fi
-
-    sleep "$SYNC_INTERVAL_SECONDS"
   done
 ) &
 
