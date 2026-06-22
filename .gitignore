@@ -23,8 +23,8 @@ env/
 
 # Runtime/generated artifacts
 links_cache.json
-rss.xml
-public/rss.xml
+feed
+public/feed
 
 # Logs
 *.log

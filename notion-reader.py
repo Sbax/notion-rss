@@ -2,7 +2,6 @@
 """Fetch a Notion page by URL using notion-py.
 
 Usage:
-    export NOTION_TOKEN_V2="your_token"
     python notion_page_cache.py "https://www.notion.so/..."
 """
 
@@ -27,28 +26,11 @@ class NotionWrapper(NotionClient):
         pass
 
     def __init__(
-        self,
-        token_v2=None,
-        monitor=False,
-        start_monitoring=False,
-        enable_caching=False,
-        cache_key=None,
-        client_specified_retry=None,
+        self
     ):
-        self.session = create_session(client_specified_retry)
-
-        if enable_caching:
-            cache_key = cache_key or hashlib.sha256(token_v2.encode()).hexdigest()
-            self._store = RecordStore(self, cache_key=cache_key)
-        else:
-            self._store = RecordStore(self)
-        if monitor:
-            self._monitor = Monitor(self)
-            if start_monitoring:
-                self.start_monitoring()
-        else:
-            self._monitor = None
-
+        self.session = create_session(None)
+        self._store = RecordStore(self)
+        self._monitor = None
         self._update_user_info()
 
 
@@ -131,6 +113,8 @@ def _extract_link_items_from_title_prop(title_prop: Any) -> list[dict[str, str]]
 
 def _collect_link_items(block: Any, out: list[dict[str, str]]) -> None:
     try:
+        block.get("properties")
+        print(block.get("properties"))
         title_prop = block.get("properties.title")
     except Exception:
         title_prop = None
@@ -190,8 +174,6 @@ def _parse_iso_datetime(raw_value: str) -> datetime:
 def _build_rss_xml(
     items: list[dict[str, str]],
     rss_title: str,
-    rss_link: str,
-    rss_description: str,
     max_items: int,
 ) -> str:
     prepared_items: list[tuple[str, str, str]] = []
@@ -225,22 +207,21 @@ def _build_rss_xml(
         xml_items.append(
             "\n".join(
                 [
-                    "    <item>",
+                    "    <entry>",
                     f"      <title>{escape(title)}</title>",
                     f"      <link>{escape(url)}</link>",
-                    f"      <guid isPermaLink=\"true\">{escape(url)}</guid>",
-                    f"      <pubDate>{escape(pub_date)}</pubDate>",
-                    f"      <description>{escape(title)}</description>",
-                    "    </item>",
+                    f"      <id>{escape(url)}</id>",
+                    f"      <published>{escape(pub_date)}</published>",
+                    f"      <updated>{escape(pub_date)}</updated>",
+                    f"      <content>{escape(title)}</content>",
+                    "    </entry>",
                 ]
             )
         )
 
     channel_blocks = [
         f"    <title>{escape(rss_title)}</title>",
-        f"    <link>{escape(rss_link)}</link>",
-        f"    <description>{escape(rss_description)}</description>",
-        f"    <lastBuildDate>{escape(format_datetime(latest_dt))}</lastBuildDate>",
+        f"    <updated>{escape(format_datetime(latest_dt))}</updated>",
     ]
 
     if xml_items:
@@ -250,11 +231,9 @@ def _build_rss_xml(
     return "\n".join(
         [
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-            "<rss version=\"2.0\">",
-            "  <channel>",
+            "<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:media=\"http://search.yahoo.com/mrss/\">",
             channel_xml,
-            "  </channel>",
-            "</rss>",
+            "</feed>",
             "",
         ]
     )
@@ -264,16 +243,12 @@ def generate_rss_from_cache(
     store_path: str,
     rss_output: str,
     rss_title: str,
-    rss_link: str,
-    rss_description: str,
     max_items: int,
 ) -> dict[str, Any]:
     items = _load_items(store_path)
     rss_xml = _build_rss_xml(
         items=items,
         rss_title=rss_title,
-        rss_link=rss_link,
-        rss_description=rss_description,
         max_items=max_items,
     )
 
@@ -296,14 +271,15 @@ def update_items(found_items: list[dict[str, str]], existing_items: list[dict[st
 
     new_items: list[dict[str, str]] = []
     for found_item in found_items:
-        link = found_item["url"]
+        link = found_item.get("url", "").strip()
+        if not link:
+            continue
         title = found_item.get("title", "").strip()
         if not title:
             continue
-        # Links are newest-first in the source page. Once we hit a known link,
-        # the rest should be older and already indexed.
+        # Add only URLs that are not already in cache (or already queued in this run).
         if link in existing_urls:
-            break
+            continue
         new_items.append(
             {
                 "title": title,
@@ -311,13 +287,14 @@ def update_items(found_items: list[dict[str, str]], existing_items: list[dict[st
                 "fetched_at": fetched_at,
             }
         )
+        existing_urls.add(link)
 
     updated_items = new_items + existing_items
     return updated_items, new_items
 
 
-def fetch_page_data(url: str, token_v2: str) -> dict[str, Any]:
-    client = NotionWrapper(token_v2=token_v2)
+def fetch_page_data(url: str) -> dict[str, Any]:
+    client = NotionWrapper()
     page = client.get_block(url)
 
     text_chunks: list[str] = []
@@ -349,12 +326,6 @@ def fetch_page_data(url: str, token_v2: str) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read a Notion page by URL.")
     parser.add_argument(
-        "--mode",
-        choices=["sync", "rss", "all"],
-        default=os.environ.get("APP_MODE", "all"),
-        help="sync=fetch Notion and update cache, rss=build RSS from cache, all=both (default)",
-    )
-    parser.add_argument(
         "url",
         nargs="?",
         default=os.environ.get("NOTION_PAGE_URL"),
@@ -366,29 +337,14 @@ def parse_args() -> argparse.Namespace:
         help="Path to JSON file storing collected links (default: LINKS_STORE or links_cache.json)",
     )
     parser.add_argument(
-        "--token-v2",
-        default=os.environ.get("NOTION_TOKEN_V2"),
-        help="Notion token_v2 (defaults to NOTION_TOKEN_V2 env var)",
-    )
-    parser.add_argument(
         "--rss-output",
-        default=os.environ.get("RSS_OUTPUT", "rss.xml"),
-        help="Path to generated RSS XML file (default: RSS_OUTPUT or rss.xml)",
+        default=os.environ.get("RSS_OUTPUT", "feed"),
+        help="Path to generated RSS XML file (default: RSS_OUTPUT or feed)",
     )
     parser.add_argument(
         "--rss-title",
         default=os.environ.get("RSS_TITLE", "Notion Feed"),
         help="RSS channel title",
-    )
-    parser.add_argument(
-        "--rss-link",
-        default=os.environ.get("RSS_LINK", "http://localhost:8080/rss.xml"),
-        help="RSS channel link",
-    )
-    parser.add_argument(
-        "--rss-description",
-        default=os.environ.get("RSS_DESCRIPTION", "Links collected from Notion"),
-        help="RSS channel description",
     )
     parser.add_argument(
         "--max-items",
@@ -403,36 +359,29 @@ def main() -> None:
     _load_dotenv()
     args = parse_args()
     output: dict[str, Any] = {}
+    if not args.url:
+        raise SystemExit("Notion page URL is required. Pass URL or set NOTION_PAGE_URL in .env.")
 
-    if args.mode in {"sync", "all"}:
-        if not args.url:
-            raise SystemExit("Notion page URL is required for sync mode. Pass URL or set NOTION_PAGE_URL in .env.")
-        if not args.token_v2:
-            raise SystemExit("NOTION_TOKEN_V2 is required for sync mode. Pass --token-v2 or set NOTION_TOKEN_V2 in .env.")
+    data = fetch_page_data(url=args.url)
+    found_items = data.get("link_items", [])
 
-        data = fetch_page_data(url=args.url, token_v2=args.token_v2)
-        found_items = data.get("link_items", [])
+    existing_items = _load_items(args.store)
+    updated_items, new_items = update_items(found_items, existing_items)
+    _save_items(args.store, updated_items)
 
-        existing_items = _load_items(args.store)
-        updated_items, new_items = update_items(found_items, existing_items)
-        _save_items(args.store, updated_items)
+    output["sync"] = {
+        "new_items_count": len(new_items),
+        "total_items_count": len(updated_items),
+        "new_items": new_items,
+        "items": updated_items,
+    }
 
-        output["sync"] = {
-            "new_items_count": len(new_items),
-            "total_items_count": len(updated_items),
-            "new_items": new_items,
-            "items": updated_items,
-        }
-
-    if args.mode in {"rss", "all"}:
-        output["rss"] = generate_rss_from_cache(
-            store_path=args.store,
-            rss_output=args.rss_output,
-            rss_title=args.rss_title,
-            rss_link=args.rss_link,
-            rss_description=args.rss_description,
-            max_items=args.max_items,
-        )
+    output["rss"] = generate_rss_from_cache(
+        store_path=args.store,
+        rss_output=args.rss_output,
+        rss_title=args.rss_title,
+        max_items=args.max_items,
+    )
 
     print(json.dumps(output, indent=2, ensure_ascii=False))
 

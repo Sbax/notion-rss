@@ -1,17 +1,9 @@
 services:
   rss:
-    build:
-      context: .
+    image: nginx:alpine
     ports:
-      - "8080:8080"
-    env_file:
-      - .env
-    environment:
-      LINKS_STORE: "/app/links_cache.json"
-      RSS_OUTPUT: "/app/public/rss.xml"
-      RSS_LINK: "http://localhost:8080/rss.xml"
-      RSS_MAX_ITEMS: "100"
-      SYNC_INTERVAL_SECONDS: "86400"
+      - "${PORT:-8080}:80"
     volumes:
-      - ./links_cache.json:/app/links_cache.json
-      - ./public:/app/public
+      - ./public:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
